@@ -6,8 +6,8 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeAbstractions #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -27,17 +27,19 @@ import Control.Monad (join)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.ByteString.Lazy (ByteString)
 import Data.JsonSpec
-  ( Field(Field), FieldSpec(Optional, Required)
+  ( Field(Field), Required, Optional
+  , NP((:*), Nil)
+  , JsonSum(L, R)
   , HasJsonDecodingSpec(DecodingSpec, fromJSONStructure)
-  , HasJsonEncodingSpec(EncodingSpec, toJSONStructure), Ref(Ref)
+  , HasJsonEncodingSpec(EncodingSpec, toJSONStructure), Ref(Ref, unRef)
   , SpecJSON(SpecJSON)
   , Specification
     ( JsonAnnotated, JsonArray, JsonBool, JsonDateTime, JsonEither, JsonInt
-    , JsonLet, JsonNullable, JsonNum, JsonObject, JsonRaw, JsonRef, JsonString
+    , JsonNullable, JsonNum, JsonObject, JsonSpecOf, JsonRaw, JsonString
     , JsonTag
     )
   , Tag(Tag), (:::), (::?), eitherDecode
-  , encode, unField
+  , encode
   )
 import Data.Proxy (Proxy(Proxy))
 import Data.Scientific (Scientific)
@@ -47,7 +49,8 @@ import OM.Show (ShowJ(ShowJ))
 import Prelude
   ( Applicative(pure), Bool(False, True), Either(Left, Right), Enum(toEnum)
   , Functor(fmap), Maybe(Just, Nothing), Monad((>>=)), Num(negate)
-  , Traversable(traverse), ($), (.), Eq, IO, Int, Show, String, realToFrac
+  , ($), (.), Eq, IO, Int, Show, String, realToFrac
+  , map
   )
 import Test.Hspec (describe, hspec, it, shouldBe)
 import qualified Data.Aeson as A
@@ -60,7 +63,7 @@ main =
       it "encodes product" $
         let
           actual :: ByteString
-          actual = A.encode $ sampleTestObject
+          actual = A.encode sampleTestObject
           expected :: ByteString
           expected = "{\"bar\":1,\"baz\":{\"bar\":0,\"foo\":\"foo2\"},\"foo\":\"foo\",\"qoo\":true,\"qux\":100}"
         in
@@ -89,7 +92,7 @@ main =
       it "encodes sum2" $
         let
           actual :: ByteString
-          actual = A.encode $ TestB
+          actual = A.encode TestB
           expected :: ByteString
           expected = "{\"tag\":\"b\"}"
         in
@@ -174,8 +177,8 @@ main =
           in
             actual `shouldBe` expected
 
-      describe "let" $ do
-        it "decodes let" $
+      describe "JsonSpecOf" $ do
+        it "decodes nested ref" $
           let
             actual :: Either String Triangle
             actual =
@@ -194,7 +197,7 @@ main =
                   }
           in
             actual `shouldBe` expected
-        it "encodes let" $
+        it "encodes nested ref" $
             let
               actual :: ByteString
               actual =
@@ -273,7 +276,7 @@ main =
         it "encodes product" $
           let
             actual :: ByteString
-            actual = A.encode $ sampleTestObjectWithNull
+            actual = A.encode sampleTestObjectWithNull
             expected :: ByteString
             expected = "{\"bar\":1,\"baz\":{\"bar\":0,\"foo\":\"foo2\"},\"foo\":\"foo\",\"qoo\":false,\"qux\":null}"
           in
@@ -302,45 +305,21 @@ main =
       describe "direct encoding/decoding" $ do
         it "eitherDecode" $
           let
-            actual
-              :: Either
-                   String
-                   (Field "foo" Text,
-                   (Maybe (Field "bar" Scientific),
-                   (Field "baz"
-                     (Field "foo" Text,
-                     (Field "bar" Int,
-                     ())),
-                   (Field "qux" (Maybe Int),
-                   (Field "qoo" Bool,
-                   ())))))
             actual =
               A.eitherDecode
                 "{\"bar\":1,\"baz\":{\"bar\":0,\"foo\":\"foo2\"},\"foo\":\"foo\",\"qux\":null,\"qoo\":false}"
                 >>= eitherDecode (Proxy @(EncodingSpec TestObj))
-            expected
-              :: Either
-                 String
-                 (Field "foo" Text,
-                 (Maybe (Field "bar" Scientific),
-                 (Field "baz"
-                   (Field "foo" Text,
-                   (Field "bar" Int,
-                   ())),
-                 (Field "qux" (Maybe Int),
-                 (Field "qoo" Bool,
-                 ())))))
             expected =
               Right
-                (Field @"foo" "foo",
-                (Just (Field @"bar" 1.0),
-                (Field @"baz"
-                  (Field @"foo" "foo2",
-                  (Field @"bar" 0,
-                  ())),
-                (Field @"qux" Nothing,
-                (Field @"qoo" False,
-                ())))))
+                (Field @"foo" "foo"
+                :* Field @"bar" (Just 1.0)
+                :* Field @"baz"
+                  (Field @"foo" "foo2"
+                  :* Field @"bar" 0
+                  :* Nil)
+                :* Field @"qux" Nothing
+                :* Field @"qoo" False
+                :* Nil)
           in
             actual `shouldBe` expected
 
@@ -355,24 +334,21 @@ main =
               Just $
                 encode
                   (Proxy @(EncodingSpec TestObj))
-                  (
-                    (Field @"foo" "foo",
-                    (Just (Field @"bar" 1.0),
-                    (Field @"baz"
-                      (Field @"foo" "foo2",
-                      (Field @"bar" 0,
-                      ())),
-                    (Field @"qux" Nothing,
-                    (Field @"qoo" False,
-                    ())))))
-                  )
+                  ( Field @"foo" "foo"
+                    :* Field @"bar" (Just 1.0)
+                    :* Field @"baz"
+                      (Field @"foo" "foo2"
+                      :* Field @"bar" 0
+                      :* Nil)
+                    :* Field @"qux" Nothing
+                    :* Field @"qoo" False
+                    :* Nil)
           in
             actual `shouldBe` expected
 
       describe "raw values" $ do
         it "decodes" $
           let
-            expected :: Either String (Field "foo" A.Value, ())
             expected =
               Right
                 (Field @"foo"
@@ -382,9 +358,8 @@ main =
                       , ("baz", A.toJSON [A.String "qux", A.Number 1.0, A.Bool False])
                       ]
                   )
-                ,())
+                :* Nil)
 
-            actual :: Either String (Field "foo" A.Value, ())
             actual =
               A.eitherDecode
                 "{ \"foo\": { \"bar\": \"barval\", \"baz\": [ \"qux\", 1, false ] } }"
@@ -410,8 +385,8 @@ main =
                         [ ("bar", A.String "barval")
                         , ("baz", A.toJSON [A.String "qux", A.Number 1.0, A.Bool False])
                         ]
-                    ),
-                  ())
+                    )
+                  :* Nil)
           in
             actual `shouldBe` expected
 
@@ -520,7 +495,7 @@ main =
           in
             actual `shouldBe` expected
 
-        it "works with JsonLet" $
+        it "works with JsonSpecOf" $
           let
             actual :: ByteString
             actual =
@@ -536,7 +511,7 @@ main =
           in
             actual `shouldBe` expected
 
-        it "decodes with JsonLet" $
+        it "decodes with JsonSpecOf" $
           let
             actual :: Either String AnnotatedTriangle
             actual =
@@ -567,87 +542,6 @@ main =
             expected = "{\"name\":\"test\"}"
           in
             actual `shouldBe` expected
-
-      describe "mutual recursion" $ do
-        describe "style1" $ do
-          it "encodes" $
-            let
-              expected :: ByteString
-              expected = "[[[],[]]]"
-
-              actual :: ByteString
-              actual = A.encode (MRec1 [MRec2 [MRec1 [], MRec1 []]])
-            in
-              actual `shouldBe` expected
-
-          it "decoces" $
-            let
-              expected :: Maybe MRec1
-              expected = Just (MRec1 [MRec2 [MRec1 [], MRec1 []]])
-
-              actual :: Maybe MRec1
-              actual = A.decode "[[[],[]]]"
-            in
-              actual `shouldBe` expected
-
-        describe "style2" $ do
-          it "encodes" $
-            let
-              expected :: ByteString
-              expected =
-                "{\"foo\":{\"bar\":{\"foo\":{\"bar\":{\"foo\":null}}}}}"
-
-              actual =
-                A.encode
-                  MRec3
-                    { foo =
-                        Just
-                          MRec4
-                            { bar =
-                                MRec3
-                                  { foo =
-                                      Just
-                                        MRec4
-                                          { bar =
-                                              MRec3
-                                                { foo = Nothing
-                                                }
-                                          }
-                                  }
-                            }
-                    }
-            in
-              actual `shouldBe` expected
-
-          it "decodes" $
-            let
-              expected :: Maybe MRec3
-              expected =
-                Just
-                  MRec3
-                    { foo =
-                        Just
-                          MRec4
-                            { bar =
-                                MRec3
-                                  { foo =
-                                      Just
-                                        MRec4
-                                          { bar =
-                                              MRec3
-                                                { foo = Nothing
-                                                }
-                                          }
-                                  }
-                            }
-                    }
-
-              actual :: Maybe MRec3
-              actual =
-                A.decode
-                  "{\"foo\":{\"bar\":{\"foo\":{\"bar\":{\"foo\":null}}}}}"
-            in
-              actual `shouldBe` expected
 
 
 sampleTestObject :: TestObj
@@ -704,33 +598,30 @@ instance HasJsonEncodingSpec TestSum where
       ]
   toJSONStructure = \case
     TestA i t ->
-      Left
-        (Field @"tag" (Tag @"a"),
-        (Field @"content"
-          ( (Field @"int-field" i
-          , (Field @"txt-field" t
-          , ()
+      L (Field @"tag" (Tag @"a")
+        :* Field @"content"
+          ( Field @"int-field" i
+          :* Field @"txt-field" t
+          :* Nil
           )
-        )),
-        ()))
+        :* Nil)
     TestB ->
-      Right
+      R (L
         ( Field @"tag" (Tag @"b")
-        , ()
-        )
+        :* Nil
+        ))
 instance HasJsonDecodingSpec TestSum where
   type DecodingSpec TestSum = EncodingSpec TestSum
   fromJSONStructure = \case
-    Left
-        (Field @"tag" Tag,
-        (Field @"content"
-          (Field @"int-field" int,
-          (Field @"txt-field" txt,
-          ())),
-        ()))
+    L (Field @"tag" Tag
+        :* Field @"content"
+          (Field @"int-field" int
+          :* Field @"txt-field" txt
+          :* Nil)
+        :* Nil)
       ->
         pure (TestA int txt)
-    Right _ ->
+    R _ ->
       pure TestB
 
 
@@ -775,21 +666,21 @@ instance HasJsonEncodingSpec TestObj where
         Required "qoo" JsonBool
       ]
   toJSONStructure TestObj { foo , bar , baz, qux, qoo } =
-    (Field @"foo" foo,
-    (fmap (Field @"bar" . realToFrac) bar,
-    (Field @"baz" (toJSONStructure baz),
-    (Field @"qux" qux,
-    (Field @"qoo" qoo,
-    ())))))
+    Field @"foo" foo
+    :* (Field @"bar" . fmap realToFrac) bar
+    :* Field @"baz" (toJSONStructure baz)
+    :* Field @"qux" qux
+    :* Field @"qoo" qoo
+    :* Nil
 instance HasJsonDecodingSpec TestObj where
   type DecodingSpec TestObj = EncodingSpec TestObj
   fromJSONStructure
-      (Field @"foo" foo,
-      (fmap (unField @"bar") -> bar,
-      (Field @"baz" rawBaz,
-      (Field @"qux" qux,
-      (Field @"qoo" qoo,
-      ())))))
+      (Field @"foo" foo
+      :* Field @"bar" bar
+      :* Field @"baz" rawBaz
+      :* Field @"qux" qux
+      :* Field @"qoo" qoo
+      :* Nil)
     = do
       baz <- fromJSONStructure rawBaz
       pure TestObj { foo, bar, baz, qux, qoo }
@@ -807,15 +698,15 @@ instance HasJsonEncodingSpec TestSubObj where
        , Required "bar" JsonInt
        ]
   toJSONStructure TestSubObj { foo2 , bar2 } =
-    (Field @"foo" foo2,
-    (Field @"bar" bar2,
-    ()))
+    Field @"foo" foo2
+    :* Field @"bar" bar2
+    :* Nil
 instance HasJsonDecodingSpec TestSubObj where
   type DecodingSpec TestSubObj = EncodingSpec TestSubObj
   fromJSONStructure
-      (Field @"foo" foo2,
-      (Field @"bar" bar2,
-      ()))
+      (Field @"foo" foo2
+      :* Field @"bar" bar2
+      :* Nil)
     =
       pure TestSubObj {foo2 , bar2}
 
@@ -833,15 +724,15 @@ instance HasJsonEncodingSpec User where
        , Required "last-login" JsonDateTime
        ]
   toJSONStructure user =
-    (Field @"name" (name user),
-    (Field @"last-login" (lastLogin user),
-    ()))
+    Field @"name" (name user)
+    :* Field @"last-login" (lastLogin user)
+    :* Nil
 instance HasJsonDecodingSpec User where
   type DecodingSpec User = EncodingSpec User
   fromJSONStructure
-      (Field @"name" name,
-      (Field @"last-login" lastLogin,
-      ()))
+      (Field @"name" name
+      :* Field @"last-login" lastLogin
+      :* Nil)
     =
       pure User { name , lastLogin }
 
@@ -861,17 +752,17 @@ instance HasJsonEncodingSpec Vertex where
        , Required "z" JsonInt
        ]
   toJSONStructure Vertex {x, y, z} =
-    (Field @"x" x,
-    (Field @"y" y,
-    (Field @"z" z,
-    ())))
+    Field @"x" x
+    :* Field @"y" y
+    :* Field @"z" z
+    :* Nil
 instance HasJsonDecodingSpec Vertex where
   type DecodingSpec Vertex = EncodingSpec Vertex
   fromJSONStructure
-      (Field @"x" x,
-      (Field @"y" y,
-      (Field @"z" z,
-      ())))
+      (Field @"x" x
+      :* Field @"y" y
+      :* Field @"z" z
+      :* Nil)
     =
       pure Vertex { x, y, z }
 
@@ -883,70 +774,56 @@ data Triangle = Triangle
   }
   deriving stock (Show, Eq)
   deriving (ToJSON, FromJSON) via (SpecJSON Triangle)
+
 instance HasJsonEncodingSpec Triangle where
   type EncodingSpec Triangle =
-    JsonLet
-      '[ '("Vertex", EncodingSpec Vertex) ]
       (JsonObject
-        '[ Required "vertex1" (JsonRef "Vertex")
-         , Required "vertex2" (JsonRef "Vertex")
-         , Required "vertex3" (JsonRef "Vertex")
+        '[ Required "vertex1" (JsonSpecOf Vertex)
+         , Required "vertex2" (JsonSpecOf Vertex)
+         , Required "vertex3" (JsonSpecOf Vertex)
          ])
   toJSONStructure Triangle {vertex1, vertex2, vertex3} =
-    (Field @"vertex1" (Ref $ toJSONStructure vertex1),
-    (Field @"vertex2" (Ref $ toJSONStructure vertex2),
-    (Field @"vertex3" (Ref $ toJSONStructure vertex3),
-    ())))
+    Field @"vertex1" (Ref vertex1)
+    :* Field @"vertex2" (Ref vertex2)
+    :* Field @"vertex3" (Ref vertex3)
+    :* Nil
+
 instance HasJsonDecodingSpec Triangle where
   type DecodingSpec Triangle = EncodingSpec Triangle
   fromJSONStructure
-      (Field @"vertex1" (Ref rawVertex1),
-      (Field @"vertex2" (Ref rawVertex2),
-      (Field @"vertex3" (Ref rawVertex3),
-      ())))
+      (Field @"vertex1" (Ref vertex1)
+      :* Field @"vertex2" (Ref vertex2)
+      :* Field @"vertex3" (Ref vertex3)
+      :* Nil)
     = do
-      vertex1 <- fromJSONStructure rawVertex1
-      vertex2 <- fromJSONStructure rawVertex2
-      vertex3 <- fromJSONStructure rawVertex3
       pure Triangle{vertex1, vertex2, vertex3}
 
 
 data LabelledTree = LabelledTree
-  {    label :: Text
+  { label :: Text
   , children :: [LabelledTree]
   }
   deriving stock (Show, Eq)
   deriving (ToJSON, FromJSON) via (SpecJSON LabelledTree)
 instance HasJsonEncodingSpec LabelledTree where
   type EncodingSpec LabelledTree =
-      JsonLet
-        '[ '("LabelledTree",
-               JsonObject
-                 '[ Required "label" JsonString
-                  , Required "children" (JsonArray (JsonRef "LabelledTree"))
-                  ]
-            )
-         ]
-        (JsonRef "LabelledTree")
+    JsonObject
+      '[Required "label" JsonString
+       ,Required "children" (JsonArray (JsonSpecOf LabelledTree))
+       ]
   toJSONStructure LabelledTree {label , children } =
-    Ref
-      (Field @"label" label,
-      (Field @"children"
-        [ toJSONStructure child
-        | child <- children
-        ],
-      ()))
+    Field @"label" label
+    :* Field @"children" (map Ref children)
+    :* Nil
 instance HasJsonDecodingSpec LabelledTree where
   type DecodingSpec LabelledTree = EncodingSpec LabelledTree
   fromJSONStructure
-      (
-        Ref
-          (Field @"label" label,
-          (Field @"children" children_,
-          ()))
+      (Field @"label" label
+      :* Field @"children" children_
+      :* Nil
       )
     = do
-      children <- traverse fromJSONStructure children_
+      let children = map unRef children_
       pure LabelledTree { label , children }
 
 
@@ -969,22 +846,22 @@ instance HasJsonEncodingSpec TestOptionality where
        ]
 
   toJSONStructure TestOptionality { toFoo , toBar , toBaz , toQux } =
-    (fmap (Field @"foo") toFoo,
-    (Field @"bar" toBar,
-    ((Just . Field @"baz") toBaz, -- when encoding, prefer explicit null for testing.
-    (Field @"qux" toQux,
-    ()))))
+    Field @"foo" toFoo
+    :* Field @"bar" toBar
+    :* Field @"baz" (Just toBaz) -- when encoding, prefer explicit null for testing.
+    :* Field @"qux" toQux
+    :* Nil
 instance HasJsonDecodingSpec TestOptionality where
   type DecodingSpec TestOptionality = EncodingSpec TestOptionality
 
   fromJSONStructure
-      (fmap (unField @"foo") -> toFoo,
-      (Field @"bar" toBar,
-      (join . fmap (unField @"baz") -> toBaz,
-      (Field @"qux" toQux,
-      ()))))
+      (Field @"foo" toFoo
+      :* Field @"bar" toBar
+      :* Field @"baz" (join -> toBaz)
+      :* Field @"qux" toQux
+      :* Nil)
     =
-      pure TestOptionality { toFoo , toBar , toBaz , toQux }
+      pure TestOptionality { toFoo , toBar , toBaz, toQux }
 
 
 data TestHasField = TestHasField
@@ -1016,99 +893,6 @@ instance HasJsonDecodingSpec TestHasField where
               }
 
         }
-
-
-{- Mutually recursive test.  -}
-{- ========================================================================== -}
-
-newtype MRec1 = MRec1 [MRec2]
-  deriving (ToJSON, FromJSON) via (SpecJSON MRec1)
-  deriving stock (Show, Eq)
-newtype MRec2 = MRec2 [MRec1]
-  deriving stock (Show, Eq)
-instance HasJsonEncodingSpec MRec1 where
-  type EncodingSpec MRec1 =
-    JsonLet
-     '[ '("one", JsonArray (JsonRef "two"))
-      , '("two", JsonArray (JsonRef "one"))
-      ]
-      (JsonRef "one")
-
-  toJSONStructure (MRec1 m2s) =
-    Ref
-      [ Ref (fmap toJSONStructure m1s)
-      | MRec2 m1s <- m2s
-      ]
-instance HasJsonDecodingSpec MRec1 where
-  type DecodingSpec MRec1 = EncodingSpec MRec1
-
-  fromJSONStructure (Ref m2s_) = do
-    m2s <-
-      traverse
-        (\(Ref m1s_) -> do
-          m1s <- traverse fromJSONStructure m1s_
-          pure (MRec2 m1s)
-        )
-        m2s_
-    pure (MRec1 m2s)
-
-
-{- Another mutually recursive test. -}
-{- ========================================================================== -}
-
-type SharedRecSpecs =
-  '[ '( "three"
-      , JsonObject
-         '[ "foo" ::: JsonNullable (JsonRef "four")
-          ]
-      )
-   , '( "four"
-      , JsonObject
-         '[ "bar" ::: JsonRef "three"
-          ]
-      )
-   ]
-
-
-newtype MRec3 = MRec3
-  { foo :: Maybe MRec4
-  }
-  deriving stock (Show, Eq)
-  deriving (ToJSON, FromJSON) via (SpecJSON MRec3)
-instance HasJsonEncodingSpec MRec3 where
-  type EncodingSpec MRec3 =
-    JsonLet SharedRecSpecs (JsonRef "three")
-
-  toJSONStructure MRec3 { foo } =
-    Ref
-      (Field @"foo" (fmap toJSONStructure foo),
-      ())
-instance HasJsonDecodingSpec MRec3 where
-  type DecodingSpec MRec3 = EncodingSpec MRec3
-  fromJSONStructure ( Ref (Field @"foo" rawFoo, ()))
-    = do
-      foo <- traverse fromJSONStructure rawFoo
-      pure MRec3 { foo }
-
-
-newtype MRec4 = MRec4
-  { bar :: MRec3
-  }
-  deriving stock (Show, Eq)
-instance HasJsonEncodingSpec MRec4 where
-  type EncodingSpec MRec4 =
-    JsonLet SharedRecSpecs (JsonRef "four")
-  toJSONStructure MRec4 { bar } =
-    Ref
-      (Field @"bar" (toJSONStructure bar),
-      ())
-instance HasJsonDecodingSpec MRec4 where
-  type DecodingSpec MRec4 = EncodingSpec MRec4
-  fromJSONStructure ( Ref (Field @"bar" rawbar, ()))
-    = do
-      bar <- fromJSONStructure rawbar
-      pure MRec4 { bar }
-
 {- ========================================================================== -}
 
 
@@ -1132,15 +916,15 @@ instance HasJsonEncodingSpec AnnotatedUser where
          , Required "age" JsonInt
          ])
   toJSONStructure AnnotatedUser { auName, auAge } =
-    (Field @"name" auName,
-    (Field @"age" auAge,
-    ()))
+    Field @"name" auName
+    :* Field @"age" auAge
+    :* Nil
 instance HasJsonDecodingSpec AnnotatedUser where
   type DecodingSpec AnnotatedUser = EncodingSpec AnnotatedUser
   fromJSONStructure
-      (Field @"name" auName,
-      (Field @"age" auAge,
-      ()))
+      (Field @"name" auName
+      :* Field @"age" auAge
+      :* Nil)
     =
       pure AnnotatedUser { auName, auAge }
 
@@ -1162,21 +946,27 @@ instance HasJsonEncodingSpec AnnotatedVertex where
          , Required "z" JsonInt
          ])
   toJSONStructure AnnotatedVertex { avX, avY, avZ } =
-    (Field @"x" avX,
-    (Field @"y" avY,
-    (Field @"z" avZ,
-    ())))
+    Field @"x" avX
+    :* Field @"y" avY
+    :* Field @"z" avZ
+    :* Nil
 instance HasJsonDecodingSpec AnnotatedVertex where
   type DecodingSpec AnnotatedVertex = EncodingSpec AnnotatedVertex
   fromJSONStructure
-      (Field @"x" avX,
-      (Field @"y" avY,
-      (Field @"z" avZ,
-      ())))
+      (Field @"x" avX
+      :* Field @"y" avY
+      :* Field @"z" avZ
+      :* Nil)
     =
       pure AnnotatedVertex { avX, avY, avZ }
 
 
+-- NOTE: Annotations cannot be trivially and globally modified for
+-- 'JsonSpecOf' structures — a known trade-off of the current design.
+
+-- NOTE: field/refield allows remapping Haskell record field names to
+-- JSON keys. The @sym type applications here serve as documentation
+-- and guard against accidental test drift.
 data AnnotatedTriangle = AnnotatedTriangle
   { atVertex1 :: AnnotatedVertex
   , atVertex2 :: AnnotatedVertex
@@ -1184,41 +974,29 @@ data AnnotatedTriangle = AnnotatedTriangle
   }
   deriving stock (Show, Eq)
   deriving (ToJSON, FromJSON) via (SpecJSON AnnotatedTriangle)
+
 instance HasJsonEncodingSpec AnnotatedTriangle where
   type EncodingSpec AnnotatedTriangle =
-    JsonLet
-      '[ '("Vertex",
-             JsonAnnotated
-               '[ '("description", "A 3D vertex used in shapes") ]
-               (JsonObject
-                 '[ Required "x" JsonInt
-                  , Required "y" JsonInt
-                  , Required "z" JsonInt
-                  ]))
-       ]
-      (JsonAnnotated
+      JsonAnnotated
         '[ '("description", "A triangle with three vertices") ]
         (JsonObject
-          '[ Required "vertex1" (JsonRef "Vertex")
-           , Required "vertex2" (JsonRef "Vertex")
-           , Required "vertex3" (JsonRef "Vertex")
-           ]))
+          '[ Required "vertex1" (JsonSpecOf AnnotatedVertex)
+           , Required "vertex2" (JsonSpecOf AnnotatedVertex)
+           , Required "vertex3" (JsonSpecOf AnnotatedVertex)
+           ])
   toJSONStructure AnnotatedTriangle { atVertex1, atVertex2, atVertex3 } =
-    (Field @"vertex1" (Ref $ toJSONStructure atVertex1),
-    (Field @"vertex2" (Ref $ toJSONStructure atVertex2),
-    (Field @"vertex3" (Ref $ toJSONStructure atVertex3),
-    ())))
+    Field @"vertex1" (Ref atVertex1)
+    :* Field @"vertex2" (Ref atVertex2)
+    :* Field @"vertex3" (Ref atVertex3)
+    :* Nil
 instance HasJsonDecodingSpec AnnotatedTriangle where
   type DecodingSpec AnnotatedTriangle = EncodingSpec AnnotatedTriangle
   fromJSONStructure
-      (Field @"vertex1" (Ref rawVertex1),
-      (Field @"vertex2" (Ref rawVertex2),
-      (Field @"vertex3" (Ref rawVertex3),
-      ())))
+      (Field @"vertex1" (Ref atVertex1)
+      :* Field @"vertex2" (Ref atVertex2)
+      :* Field @"vertex3" (Ref atVertex3)
+      :* Nil)
     = do
-      atVertex1 <- fromJSONStructure rawVertex1
-      atVertex2 <- fromJSONStructure rawVertex2
-      atVertex3 <- fromJSONStructure rawVertex3
       pure AnnotatedTriangle { atVertex1, atVertex2, atVertex3 }
 
 
@@ -1235,13 +1013,13 @@ instance HasJsonEncodingSpec AnnotatedWithBool where
        ]
       (JsonObject '[ Required "name" JsonString ])
   toJSONStructure AnnotatedWithBool { awbName } =
-    (Field @"name" awbName,
-    ())
+    Field @"name" awbName
+    :* Nil
 instance HasJsonDecodingSpec AnnotatedWithBool where
   type DecodingSpec AnnotatedWithBool = EncodingSpec AnnotatedWithBool
   fromJSONStructure
-      (Field @"name" awbName,
-      ())
+      (Field @"name" awbName
+      :* Nil)
     =
       pure AnnotatedWithBool { awbName }
 

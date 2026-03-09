@@ -1,6 +1,8 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -15,27 +17,31 @@ module Data.JsonSpec.Decode (
 ) where
 
 
-import Control.Applicative (Alternative((<|>)))
 import Data.Aeson.Types
-  ( FromJSON(parseJSON), Value(Null, Object), Parser, parseEither, withArray
+  ( FromJSON(parseJSON), Value(Null), Parser, parseEither, withArray
   , withObject, withScientific, withText
   )
 import Data.JsonSpec.Spec
-  ( Field(Field), Ref(Ref), Tag(Tag), JSONStructure, JStruct, Specification, sym
+  ( Field(Field), FieldSpec(JsonField), Ref(Ref), Tag(Tag), JSONStructure
+  , JStruct, Specification, sym, KnownReqSpec (reqSpecSing), SReqSpec (SReq, SOpt)
+  , JsonSum (JsonSum), JStructVal (JStructVal)
   )
-import Data.Proxy (Proxy)
+import Data.Foldable (foldMap')
+import Data.Monoid (Alt(getAlt, Alt))
+import Data.Proxy (Proxy(Proxy))
 import Data.Scientific (Scientific)
+import Data.SOP (NP, All, (:.:)(Comp), hcpure, hsequence', hapInjs)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import GHC.TypeLits (KnownSymbol)
 import Prelude
-  ( Applicative(pure), Either(Left, Right), Eq((==)), Functor(fmap)
+  ( Applicative(pure), Either, Eq((==)), Functor(fmap)
   , Maybe(Just, Nothing), MonadFail(fail), Semigroup((<>))
   , Traversable(traverse), ($), (.), (<$>), Bool, Int, String
   )
+import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Vector as Vector
-
 
 {- |
   Types of this class can be JSON decoded according to a type-level
@@ -82,34 +88,38 @@ instance StructureFromJSON Scientific where
   reprParseJSON = withScientific "number" pure
 instance StructureFromJSON Int where
   reprParseJSON = parseJSON
-instance StructureFromJSON () where
-  reprParseJSON =
-    withObject "empty object" $ \_ -> pure ()
 instance StructureFromJSON Bool where
   reprParseJSON = parseJSON
-instance (KnownSymbol key, StructureFromJSON val, StructureFromJSON more) => StructureFromJSON (Field key val, more) where
-  reprParseJSON =
-    withObject "object" $ \o -> do
-      more <- reprParseJSON (Object o)
-      case KM.lookup (sym @key) o of
-        Nothing -> fail $ "could not find key: " <> sym @key
-        Just rawVal -> do
-          val <- reprParseJSON rawVal
-          pure (Field val, more)
-instance (KnownSymbol key, StructureFromJSON val, StructureFromJSON more) => StructureFromJSON (Maybe (Field key val), more) where
-  reprParseJSON =
-    withObject "object" $ \o -> do
-      more <- reprParseJSON (Object o)
-      case KM.lookup (sym @key) o of
-        Nothing ->
-          pure (Nothing, more)
-        Just rawVal -> do
-          val <- reprParseJSON rawVal
-          pure (Just (Field val), more)
-instance (StructureFromJSON left, StructureFromJSON right) => StructureFromJSON (Either left right) where
-  reprParseJSON v =
-    (Left <$> reprParseJSON v)
-    <|> (Right <$> reprParseJSON v)
+-- NOTE: The previous approach called 'withObject' per field, which likely allocated a closure per field
+-- (the simplifier is unlikely to merge or eliminate the validation branch in 'withObject') and created
+-- a data dependency chain via per-field recursion on 'reprParseJSON'. This version calls 'withObject'
+-- once and parses all fields from the same object reference.
+instance (All FieldFromJSON specs) => StructureFromJSON (NP Field specs) where
+  reprParseJSON = withObject "object" (\o -> hsequence' $
+      hcpure (Proxy @FieldFromJSON) $ Comp (parseField o)
+    )
+{-
+  Try each branch of the sum left-to-right, taking the first that
+  parses successfully:
+
+  1. 'hcpure' builds a product of parsers, one per branch:
+       @NP (Parser :.: JStructVal) specs@
+
+  2. 'hapInjs' explodes the product into a list of sums, each injecting
+     one branch into the coproduct:
+       @[NS (Parser :.: JStructVal) specs]@
+
+  3. @hsequence'@ on each 'NS' sequences the parser out, yielding
+       @Parser (NS JStructVal specs)@.
+
+  4. @foldMap' (Alt . hsequence')@ combines them via @(\<|>)@, picking
+     the first success. 'foldMap'' is strict in the 'Alt' spine to
+     avoid thunk buildup.
+-}
+instance (All AltFromJSON specs) => StructureFromJSON (JsonSum specs) where
+  reprParseJSON v = fmap JsonSum .
+    getAlt . foldMap' (Alt . hsequence') . hapInjs $
+      hcpure (Proxy @AltFromJSON) $ Comp (parseAlt v)
 instance (KnownSymbol const) => StructureFromJSON (Tag const) where
   reprParseJSON =
     withText "constant" $ \c ->
@@ -128,12 +138,12 @@ instance (StructureFromJSON a) => StructureFromJSON (Maybe a) where
       Null -> pure Nothing
       _ -> Just <$> reprParseJSON val
 instance
-    (StructureFromJSON (JStruct env spec))
+    (HasJsonDecodingSpec a, StructureFromJSON (JStruct (DecodingSpec a)))
   =>
-    StructureFromJSON (Ref env spec)
-  where
-  reprParseJSON val =
-    Ref <$> reprParseJSON val
+    StructureFromJSON (Ref a) where
+  reprParseJSON val = do
+    parsed <- reprParseJSON val
+    Ref <$> fromJSONStructure parsed
 
 
 {-|
@@ -142,11 +152,27 @@ instance
 -}
 eitherDecode
   :: forall spec.
-     (StructureFromJSON (JSONStructure spec))
+     (StructureFromJSON (JStruct spec))
    => Proxy (spec :: Specification)
   -> Value
-  -> Either String (JSONStructure spec)
+  -> Either String (JStruct spec)
 eitherDecode _spec =
   parseEither reprParseJSON
 
 
+class FieldFromJSON (spec :: FieldSpec) where
+  parseField :: A.Object -> Parser (Field spec)
+instance (KnownSymbol key, KnownReqSpec req, StructureFromJSON (JStruct spec)) => FieldFromJSON (JsonField key req spec) where
+  parseField o =
+    case KM.lookup (sym @key) o of
+      Nothing -> case reqSpecSing @req of
+        SReq -> fail $ "could not find key: " <> sym @key
+        SOpt -> pure $ Field Nothing
+      Just raw -> case reqSpecSing @req of
+        SReq -> Field <$> reprParseJSON raw
+        SOpt -> Field . Just <$> reprParseJSON raw
+
+class AltFromJSON (spec :: Specification) where
+  parseAlt :: A.Value -> Parser (JStructVal spec)
+instance (StructureFromJSON (JStruct spec)) => AltFromJSON spec where
+  parseAlt = fmap JStructVal . reprParseJSON

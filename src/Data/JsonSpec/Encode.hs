@@ -1,7 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -18,17 +18,19 @@ module Data.JsonSpec.Encode (
 import Data.Aeson (ToJSON(toJSON), Value)
 import Data.JsonSpec.Spec
   ( Field(Field), Ref(unRef), Specification(JsonArray), JSONStructure, JStruct
-  , Tag, sym
+  , Tag, sym, FieldSpec(JsonField), KnownReqSpec(reqSpecSing), SReqSpec(SReq, SOpt)
+  , JsonSum(getJsonSum), JStructVal (JStructVal)
   )
 import Data.Proxy (Proxy(Proxy))
 import Data.Scientific (Scientific)
+import Data.SOP (NP, All, K(K), HCollapse(hcollapse), hcmap, hcfoldMap)
 import Data.Set (Set)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import GHC.TypeLits (KnownSymbol)
 import Prelude
-  ( Either(Left, Right), Functor(fmap), Maybe(Just, Nothing), Monoid(mempty)
-  , (.), Bool, Int, id, maybe
+  ( Functor(fmap), Maybe(Just, Nothing), Monoid(mempty)
+  , ($), (.), Bool, Int, id, maybe
   )
 import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
@@ -63,8 +65,6 @@ class StructureToJSON a where
   reprToJSON :: a -> Value
 instance StructureToJSON Value where
   reprToJSON = id
-instance StructureToJSON () where
-  reprToJSON () = A.object []
 instance StructureToJSON Bool where
   reprToJSON = toJSON
 instance StructureToJSON Text where
@@ -73,12 +73,11 @@ instance StructureToJSON Scientific where
   reprToJSON = toJSON
 instance StructureToJSON Int where
   reprToJSON = toJSON
-instance (ToJSONObject (a, b)) => StructureToJSON (a, b) where
-  reprToJSON = A.Object . toJSONObject
-instance (StructureToJSON left, StructureToJSON right) => StructureToJSON (Either left right) where
-  reprToJSON = \case
-    Left val -> reprToJSON val
-    Right val -> reprToJSON val
+instance (All ToJSONField specs) => StructureToJSON (NP Field specs) where
+  reprToJSON np = A.Object $
+      hcfoldMap (Proxy @ToJSONField) (toJSONField KM.singleton) np
+instance (All AltToJSON specs) => StructureToJSON (JsonSum specs) where
+  reprToJSON = hcollapse . hcmap (Proxy @AltToJSON) (K . altToJSON) . getJsonSum
 instance (KnownSymbol const) => StructureToJSON (Tag const) where
   reprToJSON _proxy = toJSON (sym @const @Text)
 instance (StructureToJSON a) => StructureToJSON [a] where
@@ -88,44 +87,35 @@ instance StructureToJSON UTCTime where
 instance (StructureToJSON a) => StructureToJSON (Maybe a) where
   reprToJSON = maybe A.Null reprToJSON
 instance
-    (StructureToJSON (JStruct env spec))
+    (HasJsonEncodingSpec a, StructureToJSON (JStruct (EncodingSpec a)))
   =>
-    StructureToJSON (Ref env spec)
+    StructureToJSON (Ref a)
   where
-    reprToJSON = reprToJSON . unRef
-
+  reprToJSON = reprToJSON . toJSONStructure . unRef
 
 {- |
-  This class is to help 'StructureToJSON' recursively encode objects, and
-  is mutually recursive with 'StructureToJSON'. If we tried to "recurse
-  on the rest of the object" directly in 'StructureToJSON' we would end
-  up with a partial function, because 'reprToJSON' returns a 'Value'
-  not an 'Object'. We would therefore have to pattern match on 'Value'
-  to get the 'Object' back out, but we would have to call 'error' if the
-  'Value' mysteriously somehow wasn't an 'Object' after all. Instead of
-  calling error because "it can't ever happen", we use this helper so
-  the compiler can prove it never happens.
+  Encode a single 'Field' to a key-value pair (or nothing, for absent
+  optional fields). Used by the 'StructureToJSON' instance for @NP Field@
+  to fold over all fields in an object.
 -}
-class ToJSONObject a where
-  toJSONObject :: a -> A.Object
-instance ToJSONObject () where
-  toJSONObject _ = mempty
-instance (KnownSymbol key, StructureToJSON val, ToJSONObject more) => ToJSONObject (Field key val, more) where
-  toJSONObject (Field val, more) =
-    KM.insert
-      (sym @key)
-      (reprToJSON val)
-      (toJSONObject more)
-instance (KnownSymbol key, StructureToJSON val, ToJSONObject more) => ToJSONObject (Maybe (Field key val), more) where
-  toJSONObject (mval, more) =
-    case mval of
-      Nothing -> toJSONObject more
-      Just (Field val) ->
-        KM.insert
-          (sym @key)
-          (reprToJSON val)
-          (toJSONObject more)
+class ToJSONField fspec where
+  toJSONField :: (Monoid m) => (A.Key -> A.Value -> m) -> Field fspec -> m
 
+instance
+  (KnownSymbol key, KnownReqSpec req, StructureToJSON (JStruct spec))
+  => ToJSONField (JsonField key req spec)
+  where
+  toJSONField k (Field mval) =
+    case reqSpecSing @req of
+      SReq -> k (sym @key) (reprToJSON mval)
+      SOpt -> case mval of
+        Just val -> k (sym @key) (reprToJSON val)
+        Nothing -> mempty
+
+class AltToJSON (spec :: Specification) where
+  altToJSON :: JStructVal spec -> Value
+instance (StructureToJSON (JStruct spec)) => AltToJSON spec where
+  altToJSON (JStructVal val) = reprToJSON val
 
 {-|
   Given a raw Haskell structure, directly encode it directly into an
@@ -135,5 +125,3 @@ instance (KnownSymbol key, StructureToJSON val, ToJSONObject more) => ToJSONObje
 -}
 encode :: StructureToJSON (JSONStructure spec) => Proxy spec -> JSONStructure spec -> Value
 encode Proxy = reprToJSON
-
-

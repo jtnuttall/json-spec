@@ -1,5 +1,11 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 {-|
@@ -21,15 +27,15 @@
   >       Required "last-login" JsonDateTime
   >     ]
   >   toJSONStructure user =
-  >     (Field @"name" (name user),
-  >     (Field @"last-login" (lastLogin user),
-  >     ()))
+  >     Field @"name" (name user)
+  >     :* Field @"last-login" (lastLogin user)
+  >     :* Nil
   > instance HasJsonDecodingSpec User where
   >   type DecodingSpec User = EncodingSpec User
   >   fromJSONStructure
-  >       (Field @"name" name,
-  >       (Field @"last-login" lastLogin,
-  >       ()))
+  >       (Field @"name" name
+  >       :* Field @"last-login" lastLogin
+  >       :* Nil)
   >     =
   >       pure User { name , lastLogin }
 
@@ -73,6 +79,8 @@ module Data.JsonSpec (
   (:::),
   (::?),
   FieldSpec(..),
+  Required,
+  Optional,
 
   -- * Encoding/decoding via a Specification
   HasJsonEncodingSpec(..),
@@ -80,8 +88,13 @@ module Data.JsonSpec (
   SpecJSON(..),
   Tag(..),
   Field(..),
-  unField,
+  field,
+  refield,
+  FieldValue,
   Ref(..),
+  JsonSum(..),
+  -- ** Re-exports
+  NP((:*), Nil),
 
   -- * Direct encoding/decoding
   eitherDecode,
@@ -109,14 +122,17 @@ import Data.JsonSpec.Encode
   , StructureToJSON(reprToJSON), encode
   )
 import Data.JsonSpec.Spec
-  ( Field(Field), FieldSpec(Optional, Required), Ref(Ref, unRef)
+  ( Field(Field), field, refield, FieldSpec(JsonField), FieldValue
+  , Optional, Required, Ref(Ref, unRef)
+  , JsonSum(L, R)
   , Specification
     ( JsonAnnotated, JsonArray, JsonBool, JsonDateTime, JsonEither, JsonInt
-    , JsonLet, JsonNullable, JsonNum, JsonObject, JsonRaw, JsonRef, JsonString
+    , JsonNullable, JsonNum, JsonObject, JsonSpecOf, JsonRaw, JsonString
     , JsonTag
     )
-  , Tag(Tag), (:::), (::?), JSONStructure, unField
+  , Tag(Tag), (:::), (::?), JSONStructure
   )
+import Data.SOP (NP((:*), Nil))
 import Prelude ((.), (<$>), (=<<))
 
 
@@ -141,5 +157,3 @@ instance (StructureFromJSON (JSONStructure (DecodingSpec a)), HasJsonDecodingSpe
   parseJSON v =
     SpecJSON <$>
       (fromJSONStructure =<< reprParseJSON v)
-
-
