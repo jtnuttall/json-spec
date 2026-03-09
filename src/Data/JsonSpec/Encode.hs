@@ -17,9 +17,10 @@ module Data.JsonSpec.Encode (
 
 import Data.Aeson (ToJSON(toJSON), Value)
 import Data.JsonSpec.Spec
-  ( Field(Field), Ref(unRef), Specification(JsonArray), JSONStructure, JStruct
-  , Tag, sym, FieldSpec(JsonField), KnownReqSpec(reqSpecSing), SReqSpec(SReq, SOpt)
-  , JsonSum(getJsonSum), JStructVal (JStructVal)
+  ( Field(Field), FieldSpec(JsonField), JStruct, JStructVal(JStructVal)
+  , JSONStructure, JsonSum(getJsonSum), KnownOptionality(optionalitySing)
+  , Ref(unRef), SOptionality(SRequired, SOptional)
+  , Specification(JsonArray), Tag, sym
   )
 import Data.Proxy (Proxy(Proxy))
 import Data.Scientific (Scientific)
@@ -58,7 +59,7 @@ instance (HasJsonEncodingSpec a) => HasJsonEncodingSpec (Set a) where
   also closed (i.e. not exported, so the user can't add instances),
   because our json representation is closed.
 
-  see 'StructureFromJSON' for an explaination about why we don't just use
+  see 'Data.JsonSpec.Decode.StructureFromJSON' for an explanation about why we don't just use
   'ToJSON'.
 -}
 class StructureToJSON a where
@@ -94,7 +95,7 @@ instance
   reprToJSON = reprToJSON . toJSONStructure . unRef
 
 {- |
-  Encode a single 'Field' to a key-value pair (or nothing, for absent
+  Encode a single 't:Field' to a key-value pair (or nothing, for absent
   optional fields). Used by the 'StructureToJSON' instance for @NP Field@
   to fold over all fields in an object.
 -}
@@ -102,13 +103,13 @@ class ToJSONField fspec where
   toJSONField :: (Monoid m) => (A.Key -> A.Value -> m) -> Field fspec -> m
 
 instance
-  (KnownSymbol key, KnownReqSpec req, StructureToJSON (JStruct spec))
+  (KnownSymbol key, KnownOptionality req, StructureToJSON (JStruct spec))
   => ToJSONField (JsonField key req spec)
   where
   toJSONField k (Field mval) =
-    case reqSpecSing @req of
-      SReq -> k (sym @key) (reprToJSON mval)
-      SOpt -> case mval of
+    case optionalitySing @req of
+      SRequired -> k (sym @key) (reprToJSON mval)
+      SOptional -> case mval of
         Just val -> k (sym @key) (reprToJSON val)
         Nothing -> mempty
 

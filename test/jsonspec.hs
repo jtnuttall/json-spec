@@ -244,7 +244,7 @@ main =
                   }
           in
             actual `shouldBe` expected
-        it "decodes" $
+        it "encodes" $
           let
             actual :: ByteString
             actual =
@@ -559,8 +559,8 @@ sampleTestObject =
     }
 
 
-sampleTestObjectWithNull:: TestObj
-sampleTestObjectWithNull=
+sampleTestObjectWithNull :: TestObj
+sampleTestObjectWithNull =
   TestObj
     { foo = "foo"
     , bar = Just 1

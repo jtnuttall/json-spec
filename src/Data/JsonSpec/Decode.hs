@@ -22,9 +22,10 @@ import Data.Aeson.Types
   , withObject, withScientific, withText
   )
 import Data.JsonSpec.Spec
-  ( Field(Field), FieldSpec(JsonField), Ref(Ref), Tag(Tag), JSONStructure
-  , JStruct, Specification, sym, KnownReqSpec (reqSpecSing), SReqSpec (SReq, SOpt)
-  , JsonSum (JsonSum), JStructVal (JStructVal)
+  ( Field(Field), FieldSpec(JsonField), JStruct, JStructVal(JStructVal)
+  , JSONStructure, JsonSum(JsonSum), KnownOptionality(optionalitySing)
+  , Ref(Ref), SOptionality(SRequired, SOptional), Specification, Tag(Tag)
+  , sym
   )
 import Data.Foldable (foldMap')
 import Data.Monoid (Alt(getAlt, Alt))
@@ -70,13 +71,13 @@ class HasJsonDecodingSpec a where
 
   We can't just use 'Data.Aeson.FromJSON' because the types we are using
   to represent "json data" (i.e. the 'JSONStructure' type family) already
-  have 'ToJSON' instances. Even if we were to make a bunch of newtypes
+  have 'Data.Aeson.ToJSON' instances. Even if we were to make a bunch of newtypes
   or whatever to act as the json representation (and therefor also force
   the user to do a lot of wrapping and unwrapping), that still wouldn't
   be sufficient because someone could always write an overlapping (or
-  incoherent) 'ToJSON' instance of our newtype! This way we don't have
+  incoherent) 'Data.Aeson.ToJSON' instance of our newtype! This way we don't have
   to worry about any of that, and the types that the user must deal with
-  when implementing 'fromJSONRepr' can be simple tuples and such.
+  when implementing 'reprParseJSON' can be simple tuples and such.
 -}
 class StructureFromJSON a where
   reprParseJSON :: Value -> Parser a
@@ -140,7 +141,8 @@ instance (StructureFromJSON a) => StructureFromJSON (Maybe a) where
 instance
     (HasJsonDecodingSpec a, StructureFromJSON (JStruct (DecodingSpec a)))
   =>
-    StructureFromJSON (Ref a) where
+    StructureFromJSON (Ref a)
+  where
   reprParseJSON val = do
     parsed <- reprParseJSON val
     Ref <$> fromJSONStructure parsed
@@ -162,15 +164,15 @@ eitherDecode _spec =
 
 class FieldFromJSON (spec :: FieldSpec) where
   parseField :: A.Object -> Parser (Field spec)
-instance (KnownSymbol key, KnownReqSpec req, StructureFromJSON (JStruct spec)) => FieldFromJSON (JsonField key req spec) where
+instance (KnownSymbol key, KnownOptionality req, StructureFromJSON (JStruct spec)) => FieldFromJSON (JsonField key req spec) where
   parseField o =
     case KM.lookup (sym @key) o of
-      Nothing -> case reqSpecSing @req of
-        SReq -> fail $ "could not find key: " <> sym @key
-        SOpt -> pure $ Field Nothing
-      Just raw -> case reqSpecSing @req of
-        SReq -> Field <$> reprParseJSON raw
-        SOpt -> Field . Just <$> reprParseJSON raw
+      Nothing -> case optionalitySing @req of
+        SRequired -> fail $ "could not find key: " <> sym @key
+        SOptional -> pure $ Field Nothing
+      Just raw -> case optionalitySing @req of
+        SRequired -> Field <$> reprParseJSON raw
+        SOptional -> Field . Just <$> reprParseJSON raw
 
 class AltFromJSON (spec :: Specification) where
   parseAlt :: A.Value -> Parser (JStructVal spec)

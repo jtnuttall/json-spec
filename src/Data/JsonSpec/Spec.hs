@@ -24,8 +24,9 @@ module Data.JsonSpec.Spec (
   field,
   refield,
   JStruct,
-  SReqSpec(..),
-  KnownReqSpec(..),
+  Optionality(..),
+  SOptionality(..),
+  KnownOptionality(..),
   FieldSpec(..),
   JStructVal(JStructVal, getJStructVal),
   JsonSum(JsonSum, getJsonSum, L, R),
@@ -40,14 +41,14 @@ import Data.Aeson (Value)
 import Data.Kind (Type)
 import Data.Proxy (Proxy(Proxy))
 import Data.Scientific (Scientific)
-import Data.SOP (NP((:*)), NS (S, Z), All, Compose)
+import Data.SOP (NP((:*)), NS(S, Z), All, Compose)
 import Data.String (IsString(fromString))
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import GHC.Records (HasField(getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import qualified GHC.TypeError as GE
-import Prelude (Maybe, ($), Bool, Int, type (~), Show, Eq)
+import Prelude (($), type (~), Bool, Eq, Int, Maybe, Show)
 
 
 {-|
@@ -76,7 +77,7 @@ data Specification where
     {-^ A JSON boolean value. -}
   JsonNullable :: Specification -> Specification
     {-^
-      A value that can either be `null`, or else a value conforming to
+      A value that can either be @null@, or else a value conforming to
       the specification.
 
       E.g.:
@@ -92,7 +93,7 @@ data Specification where
       "oneOf". Useful for encoding sum types.
 
       Takes a type-level list of specs. In the structural representation
-      ('JStruct'), @JsonEither@ maps to 'JsonSum', an n-ary sum built on
+      ('JStruct'), @JsonEither@ maps to 't:JsonSum', an n-ary sum built on
       @sop-core@'s 'NS'. Use 'L' to inject into the first branch and 'R'
       to shift to a later branch.
 
@@ -143,18 +144,13 @@ data Specification where
       to the "date-time" format.
     -}
   JsonSpecOf :: Type -> Specification
-  {-^
-    Embed another type's JSON spec by reference. This replaces the old
-    @JsonLet@\/@JsonRef@ mechanism: instead of defining named bindings in a
-    type-level environment, you simply point at the type whose
-    'HasJsonEncodingSpec' \/ 'HasJsonDecodingSpec' instances should be used.
-
-    This is also the mechanism for handling recursive types, since
-    type-level Haskell is strict and a naive @EncodingSpec Foo = ... EncodingSpec Foo ...@
-    would diverge. @JsonSpecOf@ defers expansion to the instance level,
-    and the corresponding structural type is wrapped in 'Ref' to break
-    the recursion at the value level.
-   -}
+    {-^
+      Embed another type's JSON spec by reference. This replaces the old
+      @JsonLet@\/@JsonRef@ mechanism: instead of defining named bindings in a
+      type-level environment, you simply point at the type whose
+      'Data.JsonSpec.HasJsonEncodingSpec' \/ 'Data.JsonSpec.HasJsonDecodingSpec'
+      instances should be used.
+    -}
   JsonRaw :: Specification
     {-^ Some raw, uninterpreted JSON value -}
   JsonAnnotated :: forall k. [(Symbol, k)] -> Specification -> Specification
@@ -163,7 +159,7 @@ data Specification where
       purposes and has no effect on encoding or decoding. The annotations
       are a list of key-value pairs at the type level. Keys are always
       symbols (type-level strings). Values can be any kind @k@: strings
-      ('Symbol'), booleans ('Bool'), natural numbers ('Nat'), or any
+      ('Symbol'), booleans ('Bool'), natural numbers ('GHC.TypeLits.Nat'), or any
       custom promoted type the user defines. Within one list, all values
       must have the same kind.
 
@@ -185,44 +181,47 @@ data Specification where
 
 
 {-| Whether a field in a 'JsonObject' is required or optional. -}
-data ReqSpec
-  = Req {-^ The field is required -}
-  | Opt {-^ The field is optional -}
+data Optionality
+  = Required {-^ The field is required -}
+  | Optional {-^ The field is optional -}
 
-{-| Singleton witness for 'ReqSpec', used to branch on required\/optional
+{-| Singleton witness for 'Optionality', used to branch on required\/optional
     at the value level within a single typeclass instance. -}
-data SReqSpec (req :: ReqSpec) where
-  SReq :: SReqSpec Req
-  SOpt :: SReqSpec Opt
+data SOptionality (req :: Optionality) where
+  SRequired :: SOptionality 'Required
+  SOptional :: SOptionality 'Optional
 
-{-| Demote a type-level 'ReqSpec' to its singleton witness. -}
-class KnownReqSpec (req :: ReqSpec) where
-  reqSpecSing :: SReqSpec req
-instance KnownReqSpec Req where reqSpecSing = SReq
-instance KnownReqSpec Opt where reqSpecSing = SOpt
+{-| Demote a type-level 'Optionality' to its singleton witness. -}
+class KnownOptionality (req :: Optionality) where
+  optionalitySing :: SOptionality req
+instance KnownOptionality 'Required where optionalitySing = SRequired
+instance KnownOptionality 'Optional where optionalitySing = SOptional
 
 {-| Specify a field in an object.  -}
-data FieldSpec = JsonField Symbol ReqSpec Specification
+data FieldSpec = JsonField Symbol Optionality Specification
 
-type Required key spec = JsonField key Req spec {-^ The field is required -}
-type Optional key spec = JsonField key Opt spec {-^ The field is optional -}
+{-| The field is required. -}
+type Required key spec = JsonField key 'Required spec
 
-{-| Alias for 'Required'. -}
+{-| The field is optional. -}
+type Optional key spec = JsonField key 'Optional spec
+
+{-| Alias for 't:Required'. -}
 type key ::: spec = Required key spec
 
 
-{-| Alias for 'Optional'. -}
+{-| Alias for 't:Optional'. -}
 type key ::? spec = Optional key spec
 
 {-| The Haskell type that carries a field's value. Required fields hold
     the structural type directly; optional fields wrap it in 'Maybe'. -}
-type family FieldValue (req :: ReqSpec) (spec :: Specification) :: Type where
-    FieldValue Req s = JStruct s
-    FieldValue Opt s = Maybe (JStruct s)
+type family FieldValue (req :: Optionality) (spec :: Specification) :: Type where
+  FieldValue 'Required s = JStruct s
+  FieldValue 'Optional s = Maybe (JStruct s)
 
 {-| Extract the value type from a fully-applied 'FieldSpec'. -}
 type family FieldSpecValue (field :: FieldSpec) :: Type where
-    FieldSpecValue (JsonField _ req spec) = FieldValue req spec
+  FieldSpecValue (JsonField _ req spec) = FieldValue req spec
 
 {-| Synonym for 'JStruct'. Retained for backwards compatibility with
     type signatures that reference the old name. -}
@@ -230,10 +229,8 @@ type JSONStructure spec = JStruct spec
 
 {-| Structural representation of a single object field.
 
-    The actual constructor is 'MkField', which takes an opaque @field ::
-    'FieldSpec'@ index. The 'Field' pattern synonym below decomposes that
-    index into @JsonField key req spec@, which lets GHC reduce
-    'FieldSpecValue' and enables @Field \@\"name\" value@ syntax.
+    Use the 'v:Field' pattern synonym for @Field \@\"name\" value@ syntax
+    via type applications.
 -}
 newtype Field (field :: FieldSpec) = MkField (FieldSpecValue field)
 {-# COMPLETE Field #-}
@@ -241,23 +238,17 @@ newtype Field (field :: FieldSpec) = MkField (FieldSpecValue field)
 deriving stock instance (Show (FieldSpecValue field)) => Show (Field field)
 deriving stock instance (Eq (FieldSpecValue field)) => Eq (Field field)
 
-{-| Bidirectional pattern that decomposes a 'Field'\'s index into
-    @JsonField key req spec@, exposing the key, requiredness, and inner
-    spec as matchable type parameters. This is what makes
-    @Field \@\"name\" value@ work — 'MkField' alone cannot accept type
-    applications for the key.
--}
 pattern Field :: forall key req spec. FieldSpecValue (JsonField key req spec) -> Field (JsonField key req spec)
 pattern Field v = MkField v
 
 {-|
-  Given a Haskell record whose fields align with its 'Specification', use 'HasField' to lift into 'Field'.
+  Given a Haskell record whose fields align with its 'Specification', use 'HasField' to lift into 't:Field'.
 -}
 field :: forall key src req spec. (HasField key src (FieldValue req spec)) => src -> Field (JsonField key req spec)
 field = refield @key
 
 {-|
-  Given a Haskell record whose fields _do not_ align with its 'Specification', use 'HasField' to lift into 'Field'
+  Given a Haskell record whose fields _do not_ align with its 'Specification', use 'HasField' to lift into 't:Field'
   by mapping the source key in the Haskell type to the key in the 'JsonObject' spec.
 -}
 refield
@@ -282,35 +273,36 @@ newtype JsonSum (specs :: [Specification]) = JsonSum {getJsonSum :: NS JStructVa
 deriving stock instance All (Compose Show JStructVal) specs => Show (JsonSum specs)
 deriving stock instance All (Compose Eq JStructVal) specs => Eq (JsonSum specs)
 
-{-| Shift to a later branch of a 'JsonSum'. -}
+{-| Shift to a later branch of a 't:JsonSum'. -}
 pattern R :: JsonSum specs -> JsonSum (spec ': specs)
 pattern R specs <- JsonSum (S (JsonSum -> specs)) where
   R (JsonSum specs) = JsonSum (S specs)
 
-{-| Inject into the first branch of a 'JsonSum'. -}
+{-| Inject into the first branch of a 't:JsonSum'. -}
 pattern L :: JStruct spec -> JsonSum (spec ': specs)
 pattern L spec = JsonSum (Z (JStructVal spec))
 
 {-# COMPLETE L, R #-}
 
+{-| Map a 'Specification' to its Haskell structural representation. -}
 type family JStruct (spec :: Specification) :: Type where
-    JStruct (JsonObject fields) =
-      NP Field fields
-    JStruct JsonString = Text
-    JStruct JsonNum = Scientific
-    JStruct JsonInt = Int
-    JStruct (JsonArray spec) = [JStruct spec]
-    JStruct JsonBool = Bool
-    JStruct (JsonEither '[]) =
-      GE.TypeError (GE.Text "JsonEither requires at least one branch")
-    JStruct (JsonEither specs) = JsonSum specs
-    JStruct (JsonTag tag) = Tag tag
-    JStruct JsonDateTime = UTCTime
-    JStruct (JsonNullable spec) = Maybe (JStruct spec)
-    JStruct (JsonSpecOf ty) = Ref ty
-    JStruct JsonRaw = Value
-    JStruct (JsonAnnotated _annotations spec) =
-      JStruct spec
+  JStruct (JsonObject fields) =
+    NP Field fields
+  JStruct JsonString = Text
+  JStruct JsonNum = Scientific
+  JStruct JsonInt = Int
+  JStruct (JsonArray spec) = [JStruct spec]
+  JStruct JsonBool = Bool
+  JStruct (JsonEither '[]) =
+    GE.TypeError (GE.Text "JsonEither requires at least one branch")
+  JStruct (JsonEither specs) = JsonSum specs
+  JStruct (JsonTag tag) = Tag tag
+  JStruct JsonDateTime = UTCTime
+  JStruct (JsonNullable spec) = Maybe (JStruct spec)
+  JStruct (JsonSpecOf ty) = Ref ty
+  JStruct JsonRaw = Value
+  JStruct (JsonAnnotated _annotations spec) =
+    JStruct spec
 
 instance (v ~ FieldValue req spec) => HasField k (NP Field (JsonField k req spec ': more)) v where
   getField (Field v :* _) = v
@@ -320,11 +312,11 @@ instance {-# overlappable #-} (HasField k (NP Field more) v) => HasField k (NP F
 
 {-|
   Newtype wrapper that marks a boundary between the closed structural
-  encoding ('StructureToJSON'/'StructureFromJSON') and the user-defined
-  'HasJsonEncodingSpec' and 'HasJsonDecodingSpec' instances.
+  encoding ('Data.JsonSpec.StructureToJSON'/'Data.JsonSpec.StructureFromJSON') and the user-defined
+  'Data.JsonSpec.HasJsonEncodingSpec' and 'Data.JsonSpec.HasJsonDecodingSpec' instances.
 
   When @JsonSpecOf SomeType@ appears in a spec, the corresponding structural
-  position is Ref SomeType, which delegates encoding and decoding to 
+  position is Ref SomeType, which delegates encoding and decoding to
   @SomeType@'s own instances.
 
   Example:
@@ -335,10 +327,12 @@ instance {-# overlappable #-} (HasField k (NP Field more) v) => HasField k (NP F
   >   toJSONStructure (Foo fs) = map Ref fs
 -}
 newtype Ref a = Ref { unRef :: a }
+  deriving stock (Show, Eq)
 
 
 {-| Structural representation of 'JsonTag'. (I.e. a constant string value.) -}
 data Tag (a :: Symbol) = Tag
+  deriving stock (Show, Eq)
 
 {- |
   Shorthand for demoting type-level strings.

@@ -1,11 +1,8 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 {-|
@@ -76,24 +73,24 @@
 module Data.JsonSpec (
   -- * Writing specifications
   Specification(..),
-  (:::),
-  (::?),
   FieldSpec(..),
   Required,
   Optional,
+  (:::),
+  (::?),
 
   -- * Encoding/decoding via a Specification
   HasJsonEncodingSpec(..),
   HasJsonDecodingSpec(..),
   SpecJSON(..),
-  Tag(..),
   Field(..),
   field,
   refield,
   FieldValue,
+  Tag(..),
   Ref(..),
   JsonSum(..),
-  -- ** Re-exports
+  -- ** Object field products (re-exported from sop-core)
   NP((:*), Nil),
 
   -- * Direct encoding/decoding
@@ -106,7 +103,9 @@ module Data.JsonSpec (
     while you might need to include them in a type signature, but they
     are not intended to be used directly.
   -}
+  JStruct,
   JSONStructure,
+  Optionality(..),
   StructureFromJSON,
   StructureToJSON,
 ) where
@@ -123,22 +122,24 @@ import Data.JsonSpec.Encode
   )
 import Data.JsonSpec.Spec
   ( Field(Field), field, refield, FieldSpec(JsonField), FieldValue
-  , Optional, Required, Ref(Ref, unRef)
+  , Optional, Required, Optionality(Required, Optional)
+  , Ref(Ref, unRef)
   , JsonSum(L, R)
+  , JStruct, JSONStructure
   , Specification
     ( JsonAnnotated, JsonArray, JsonBool, JsonDateTime, JsonEither, JsonInt
     , JsonNullable, JsonNum, JsonObject, JsonSpecOf, JsonRaw, JsonString
     , JsonTag
     )
-  , Tag(Tag), (:::), (::?), JSONStructure
+  , Tag(Tag), (:::), (::?)
   )
 import Data.SOP (NP((:*), Nil))
 import Prelude ((.), (<$>), (=<<))
 
 
 {- |
-  Helper for defining 'ToJSON' and 'FromJSON' instances based on
-  'HasEncodingJsonSpec'.
+  Helper for defining @ToJSON@ and @FromJSON@ instances based on
+  'HasJsonEncodingSpec'.
 
   Use with -XDerivingVia like:
 
@@ -147,8 +148,8 @@ import Prelude ((.), (<$>), (=<<))
   >   , bar :: Text
   >   }
   >   deriving (ToJSON, FromJSON) via (SpecJSON MyObj)
-  > instance HasEncodingSpec MyObj where ...
-  > instance HasDecodingSpec MyObj where ...
+  > instance HasJsonEncodingSpec MyObj where ...
+  > instance HasJsonDecodingSpec MyObj where ...
 -}
 newtype SpecJSON a = SpecJSON {unSpecJson :: a}
 instance (StructureToJSON (JSONStructure (EncodingSpec a)), HasJsonEncodingSpec a) => ToJSON (SpecJSON a) where
