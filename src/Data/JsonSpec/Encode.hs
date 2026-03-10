@@ -14,7 +14,8 @@ module Data.JsonSpec.Encode (
 ) where
 
 
-import Data.Aeson (ToJSON(toJSON), Value)
+import Data.Aeson (ToJSON(toJSON), Key, Value(Object, Null))
+import Data.Maybe (catMaybes)
 import Data.JsonSpec.Spec
   ( Field(Field), FieldSpec(JsonField), JStruct, JStructVal(JStructVal)
   , JSONStructure, JsonSum(getJsonSum), KnownOptionality(optionalitySing)
@@ -23,16 +24,15 @@ import Data.JsonSpec.Spec
   )
 import Data.Proxy (Proxy(Proxy))
 import Data.Scientific (Scientific)
-import Data.SOP (NP, All, K(K), HCollapse(hcollapse), hcmap, hcfoldMap)
+import Data.SOP (NP, All, K(K), HCollapse(hcollapse), hcmap)
 import Data.Set (Set)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import GHC.TypeLits (KnownSymbol)
 import Prelude
-  ( Functor(fmap), Maybe(Just, Nothing), Monoid(mempty)
+  ( Functor(fmap), Maybe(Just, Nothing)
   , ($), (.), Bool, Int, id, maybe
   )
-import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Set as Set
 
@@ -73,9 +73,9 @@ instance StructureToJSON Scientific where
   reprToJSON = toJSON
 instance StructureToJSON Int where
   reprToJSON = toJSON
-instance (All ToJSONField specs) => StructureToJSON (NP Field specs) where
-  reprToJSON np = A.Object $
-      hcfoldMap (Proxy @ToJSONField) (toJSONField KM.singleton) np
+instance (All ToFieldPair specs) => StructureToJSON (NP Field specs) where
+  reprToJSON np = Object $ KM.fromList . catMaybes $
+    hcollapse $ hcmap (Proxy @ToFieldPair) (K . toFieldPair) np
 instance (All AltToJSON specs) => StructureToJSON (JsonSum specs) where
   reprToJSON = hcollapse . hcmap (Proxy @AltToJSON) (K . altToJSON) . getJsonSum
 instance (KnownSymbol const) => StructureToJSON (Tag const) where
@@ -85,7 +85,7 @@ instance (StructureToJSON a) => StructureToJSON [a] where
 instance StructureToJSON UTCTime where
   reprToJSON = toJSON
 instance (StructureToJSON a) => StructureToJSON (Maybe a) where
-  reprToJSON = maybe A.Null reprToJSON
+  reprToJSON = maybe Null reprToJSON
 instance
     (HasJsonEncodingSpec a, StructureToJSON (JStruct (EncodingSpec a)))
   =>
@@ -94,23 +94,24 @@ instance
   reprToJSON = reprToJSON . toJSONStructure . unRef
 
 {- |
-  Encode a single 't:Field' to a key-value pair (or nothing, for absent
-  optional fields). Used by the 'StructureToJSON' instance for @NP Field@
-  to fold over all fields in an object.
--}
-class ToJSONField fspec where
-  toJSONField :: (Monoid m) => (A.Key -> A.Value -> m) -> Field fspec -> m
+  Encode a single t'Field' to a key-value pair (or nothing, for absent
+  optional fields).
 
+  Used by the 'StructureToJSON' instance for @NP Field@ to encode all
+  fields in an object.
+-}
+class ToFieldPair field where
+  toFieldPair :: Field field -> Maybe (Key, Value)
 instance
   (KnownSymbol key, KnownOptionality req, StructureToJSON (JStruct spec))
-  => ToJSONField (JsonField key req spec)
+  => ToFieldPair (JsonField key req spec)
   where
-  toJSONField k (Field mval) =
+  toFieldPair (Field mval) =
     case optionalitySing @req of
-      SRequired -> k (sym @key) (reprToJSON mval)
+      SRequired -> Just (sym @key, reprToJSON mval)
       SOptional -> case mval of
-        Just val -> k (sym @key) (reprToJSON val)
-        Nothing -> mempty
+        Just val -> Just (sym @key, reprToJSON val)
+        Nothing -> Nothing
 
 class AltToJSON (spec :: Specification) where
   altToJSON :: JStructVal spec -> Value

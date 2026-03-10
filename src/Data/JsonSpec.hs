@@ -83,15 +83,18 @@ module Data.JsonSpec (
   HasJsonEncodingSpec(..),
   HasJsonDecodingSpec(..),
   SpecJSON(..),
+  Ref(..),
+
+  -- ** Objects (products)
   Field(..),
   field,
   refield,
   FieldValue,
-  Tag(..),
-  Ref(..),
-  JsonSum(..),
-  -- ** Object field products (re-exported from sop-core)
   NP((:*), Nil),
+
+  -- ** Unions (sums)
+  Tag(..),
+  JsonSum(..),
 
   -- * Direct encoding/decoding
   eitherDecode,

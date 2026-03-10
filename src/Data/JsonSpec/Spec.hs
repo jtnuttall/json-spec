@@ -90,10 +90,10 @@ data Specification where
   JsonEither :: [Specification] -> Specification
     {-^
       One of several different specifications. Corresponds to json-schema
-      "oneOf". Useful for encoding sum types.
+      "oneOf". Useful for encoding sum types. Requires at least two branches.
 
       Takes a type-level list of specs. In the structural representation
-      ('JStruct'), @JsonEither@ maps to 't:JsonSum', an n-ary sum built on
+      ('JStruct'), @JsonEither@ maps to t'JsonSum', an n-ary sum built on
       @sop-core@'s 'NS'. Use 'L' to inject into the first branch and 'R'
       to shift to a later branch.
 
@@ -206,11 +206,11 @@ type Required key spec = JsonField key 'Required spec
 {-| The field is optional. -}
 type Optional key spec = JsonField key 'Optional spec
 
-{-| Alias for 't:Required'. -}
+{-| Alias for t'Required'. -}
 type key ::: spec = Required key spec
 
 
-{-| Alias for 't:Optional'. -}
+{-| Alias for t'Optional'. -}
 type key ::? spec = Optional key spec
 
 {-| The Haskell type that carries a field's value. Required fields hold
@@ -229,7 +229,7 @@ type JSONStructure spec = JStruct spec
 
 {-| Structural representation of a single object field.
 
-    Use the 'v:Field' pattern synonym for @Field \@\"name\" value@ syntax
+    Use the v'Field' pattern synonym for @Field \@\"name\" value@ syntax
     via type applications.
 -}
 newtype Field (field :: FieldSpec) = MkField (FieldSpecValue field)
@@ -242,13 +242,13 @@ pattern Field :: forall key req spec. FieldSpecValue (JsonField key req spec) ->
 pattern Field v = MkField v
 
 {-|
-  Given a Haskell record whose fields align with its 'Specification', use 'HasField' to lift into 't:Field'.
+  Given a Haskell record whose fields align with its 'Specification', use 'HasField' to lift into t'Field'.
 -}
 field :: forall key src req spec. (HasField key src (FieldValue req spec)) => src -> Field (JsonField key req spec)
 field = refield @key
 
 {-|
-  Given a Haskell record whose fields _do not_ align with its 'Specification', use 'HasField' to lift into 't:Field'
+  Given a Haskell record whose fields _do not_ align with its 'Specification', use 'HasField' to lift into t'Field'
   by mapping the source key in the Haskell type to the key in the 'JsonObject' spec.
 -}
 refield
@@ -273,12 +273,12 @@ newtype JsonSum (specs :: [Specification]) = JsonSum {getJsonSum :: NS JStructVa
 deriving stock instance All (Compose Show JStructVal) specs => Show (JsonSum specs)
 deriving stock instance All (Compose Eq JStructVal) specs => Eq (JsonSum specs)
 
-{-| Shift to a later branch of a 't:JsonSum'. -}
+{-| Shift to a later branch of a t'JsonSum'. -}
 pattern R :: JsonSum specs -> JsonSum (spec ': specs)
 pattern R specs <- JsonSum (S (JsonSum -> specs)) where
   R (JsonSum specs) = JsonSum (S specs)
 
-{-| Inject into the first branch of a 't:JsonSum'. -}
+{-| Inject into the first branch of a t'JsonSum'. -}
 pattern L :: JStruct spec -> JsonSum (spec ': specs)
 pattern L spec = JsonSum (Z (JStructVal spec))
 
@@ -293,9 +293,9 @@ type family JStruct (spec :: Specification) :: Type where
   JStruct JsonInt = Int
   JStruct (JsonArray spec) = [JStruct spec]
   JStruct JsonBool = Bool
-  JStruct (JsonEither '[]) =
-    GE.TypeError (GE.Text "JsonEither requires at least one branch")
-  JStruct (JsonEither specs) = JsonSum specs
+  JStruct (JsonEither (a : b : more)) = JsonSum (a : b : more)
+  JStruct (JsonEither _) =
+    GE.TypeError (GE.Text "JsonEither requires at least two branches")
   JStruct (JsonTag tag) = Tag tag
   JStruct JsonDateTime = UTCTime
   JStruct (JsonNullable spec) = Maybe (JStruct spec)

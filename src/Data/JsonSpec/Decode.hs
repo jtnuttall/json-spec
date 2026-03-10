@@ -16,9 +16,10 @@ module Data.JsonSpec.Decode (
 ) where
 
 
+import Data.Aeson ((<?>))
 import Data.Aeson.Types
-  ( FromJSON(parseJSON), Value(Null), Parser, parseEither, withArray
-  , withObject, withScientific, withText
+  ( FromJSON(parseJSON), Object, Parser, Value(Null), JSONPathElement(Key)
+  , parseEither, withArray, withObject, withScientific, withText
   )
 import Data.JsonSpec.Spec
   ( Field(Field), FieldSpec(JsonField), JStruct, JStructVal(JStructVal)
@@ -39,10 +40,9 @@ import Prelude
   , Maybe(Just, Nothing), MonadFail(fail), Semigroup((<>))
   , Traversable(traverse), ($), (.), (<$>), Bool, Int, String
   )
-import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
-import qualified Data.Aeson.Types as A
 import qualified Data.Vector as Vector
+
 
 {- |
   Types of this class can be JSON decoded according to a type-level
@@ -142,7 +142,7 @@ eitherDecode _spec =
 
 
 class FieldFromJSON (spec :: FieldSpec) where
-  parseField :: A.Object -> Parser (Field spec)
+  parseField :: Object -> Parser (Field spec)
 instance (KnownSymbol key, KnownOptionality req, StructureFromJSON (JStruct spec)) => FieldFromJSON (JsonField key req spec) where
   parseField o =
     case KM.lookup (sym @key) o of
@@ -150,11 +150,11 @@ instance (KnownSymbol key, KnownOptionality req, StructureFromJSON (JStruct spec
         SRequired -> fail $ "could not find key: " <> sym @key
         SOptional -> pure $ Field Nothing
       Just raw -> case optionalitySing @req of
-        SRequired -> Field <$> (reprParseJSON raw A.<?> A.Key (sym @key))
-        SOptional -> Field . Just <$> (reprParseJSON raw A.<?> A.Key (sym @key))
+        SRequired -> Field <$> (reprParseJSON raw <?> Key (sym @key))
+        SOptional -> Field . Just <$> (reprParseJSON raw <?> Key (sym @key))
 
 class AltFromJSON (spec :: Specification) where
-  parseAlt :: A.Value -> Parser (JStructVal spec)
+  parseAlt :: Value -> Parser (JStructVal spec)
 instance (StructureFromJSON (JStruct spec)) => AltFromJSON spec where
   parseAlt = fmap JStructVal . reprParseJSON
 
