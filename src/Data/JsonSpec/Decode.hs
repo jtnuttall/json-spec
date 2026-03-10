@@ -6,7 +6,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 {- | Decoding using specs. -}
@@ -42,6 +41,7 @@ import Prelude
   )
 import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
+import qualified Data.Aeson.Types as A
 import qualified Data.Vector as Vector
 
 {- |
@@ -96,31 +96,10 @@ instance StructureFromJSON Bool where
 -- a data dependency chain via per-field recursion on 'reprParseJSON'. This version calls 'withObject'
 -- once and parses all fields from the same object reference.
 instance (All FieldFromJSON specs) => StructureFromJSON (NP Field specs) where
-  reprParseJSON = withObject "object" (\o -> hsequence' $
+  reprParseJSON = withObject "object" $ \o -> hsequence' $
       hcpure (Proxy @FieldFromJSON) $ Comp (parseField o)
-    )
-{-
-  Try each branch of the sum left-to-right, taking the first that
-  parses successfully:
-
-  1. 'hcpure' builds a product of parsers, one per branch:
-       @NP (Parser :.: JStructVal) specs@
-
-  2. 'hapInjs' explodes the product into a list of sums, each injecting
-     one branch into the coproduct:
-       @[NS (Parser :.: JStructVal) specs]@
-
-  3. @hsequence'@ on each 'NS' sequences the parser out, yielding
-       @Parser (NS JStructVal specs)@.
-
-  4. @foldMap' (Alt . hsequence')@ combines them via @(\<|>)@, picking
-     the first success. 'foldMap'' is strict in the 'Alt' spine to
-     avoid thunk buildup.
--}
 instance (All AltFromJSON specs) => StructureFromJSON (JsonSum specs) where
-  reprParseJSON v = fmap JsonSum .
-    getAlt . foldMap' (Alt . hsequence') . hapInjs $
-      hcpure (Proxy @AltFromJSON) $ Comp (parseAlt v)
+  reprParseJSON = parseJsonEither
 instance (KnownSymbol const) => StructureFromJSON (Tag const) where
   reprParseJSON =
     withText "constant" $ \c ->
@@ -171,10 +150,31 @@ instance (KnownSymbol key, KnownOptionality req, StructureFromJSON (JStruct spec
         SRequired -> fail $ "could not find key: " <> sym @key
         SOptional -> pure $ Field Nothing
       Just raw -> case optionalitySing @req of
-        SRequired -> Field <$> reprParseJSON raw
-        SOptional -> Field . Just <$> reprParseJSON raw
+        SRequired -> Field <$> (reprParseJSON raw A.<?> A.Key (sym @key))
+        SOptional -> Field . Just <$> (reprParseJSON raw A.<?> A.Key (sym @key))
 
 class AltFromJSON (spec :: Specification) where
   parseAlt :: A.Value -> Parser (JStructVal spec)
 instance (StructureFromJSON (JStruct spec)) => AltFromJSON spec where
   parseAlt = fmap JStructVal . reprParseJSON
+
+{-|
+  Try each branch of the sum left-to-right, taking the first that
+  parses successfully:
+
+  1. 'hcpure' builds a product of parsers, one per branch:
+       @NP (Parser :.: JStructVal) specs@
+  2. 'hapInjs' explodes the product into a list of sums, each injecting
+     one branch into the coproduct:
+       @[NS (Parser :.: JStructVal) specs]@
+  3. @hsequence'@ on each 'NS' sequences the parser out, yielding
+       @Parser (NS JStructVal specs)@.
+  4. @foldMap' (Alt . hsequence')@ combines them via @(\<|>)@, picking
+     the first success. 'foldMap'' is strict in the 'Alt' spine to
+     avoid thunk buildup.
+-}
+parseJsonEither :: All AltFromJSON specs => Value -> Parser (JsonSum specs)
+parseJsonEither v = fmap JsonSum .
+  getAlt . foldMap' (Alt . hsequence') . hapInjs $
+    hcpure (Proxy @AltFromJSON) $ Comp (parseAlt v)
+

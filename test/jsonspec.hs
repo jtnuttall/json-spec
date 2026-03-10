@@ -298,9 +298,33 @@ main =
           actual :: Either String TestSum
           actual = A.eitherDecode "{\"tag\":\"c\"}"
           expected :: Either String TestSum
-          expected = Left "Error in $: unexpected constant value"
+          expected = Left "Error in $.tag: unexpected constant value"
         in
           actual `shouldBe` expected
+
+      describe "nested error paths" $ do
+        it "annotates field key on type error" $
+          let
+            actual :: Either String TestObj
+            actual = A.eitherDecode "{\"foo\":\"f\",\"bar\":1,\"baz\":{\"foo\":\"f2\",\"bar\":0},\"qux\":\"wrong\",\"qoo\":true}"
+          in
+            actual `shouldBe` Left "Error in $.qux: parsing Int failed, expected Number, but encountered String"
+
+        it "annotates nested JsonSpecOf field path" $
+          let
+            actual :: Either String Triangle
+            actual = A.eitherDecode
+              "{\"vertex1\":{\"x\":1,\"y\":2,\"z\":3},\"vertex2\":{\"x\":1,\"y\":\"bad\",\"z\":3},\"vertex3\":{\"x\":1,\"y\":2,\"z\":3}}"
+          in
+            actual `shouldBe` Left "Error in $.vertex2.y: parsing Int failed, expected Number, but encountered String"
+
+        it "annotates deeply nested path through JsonSpecOf" $
+          let
+            actual :: Either String AnnotatedTriangle
+            actual = A.eitherDecode
+              "{\"vertex1\":{\"x\":1,\"y\":2,\"z\":3},\"vertex2\":{\"x\":1,\"y\":2,\"z\":3},\"vertex3\":{\"x\":1,\"y\":2,\"z\":\"wrong\"}}"
+          in
+            actual `shouldBe` Left "Error in $.vertex3.z: parsing Int failed, expected Number, but encountered String"
 
       describe "direct encoding/decoding" $ do
         it "eitherDecode" $
@@ -542,6 +566,37 @@ main =
             expected = "{\"name\":\"test\"}"
           in
             actual `shouldBe` expected
+
+      describe "empty object" $ do
+        it "decodes" $
+          A.eitherDecode @EmptyObj "{}"
+            `shouldBe` Right EmptyObj
+        it "encodes" $
+          A.encode EmptyObj
+            `shouldBe` "{}"
+        it "roundtrips" $
+          A.eitherDecode (A.encode EmptyObj)
+            `shouldBe` Right EmptyObj
+
+      describe "optional JsonSpecOf" $ do
+        it "encodes with present ref" $
+          A.encode (OptionalRef (Just (Vertex 1 2 3)))
+            `shouldBe` "{\"vertex\":{\"x\":1,\"y\":2,\"z\":3}}"
+        it "encodes with absent ref" $
+          A.encode (OptionalRef Nothing)
+            `shouldBe` "{}"
+        it "decodes with present ref" $
+          A.eitherDecode @OptionalRef "{\"vertex\":{\"x\":1,\"y\":2,\"z\":3}}"
+            `shouldBe` Right (OptionalRef (Just (Vertex 1 2 3)))
+        it "decodes with absent ref" $
+          A.eitherDecode @OptionalRef "{}"
+            `shouldBe` Right (OptionalRef Nothing)
+        it "roundtrips present" $ do
+          let val = OptionalRef (Just (Vertex 4 5 6))
+          A.eitherDecode (A.encode val) `shouldBe` Right val
+        it "roundtrips absent" $ do
+          let val = OptionalRef Nothing
+          A.eitherDecode (A.encode val) `shouldBe` Right val
 
 
 sampleTestObject :: TestObj
@@ -896,6 +951,38 @@ instance HasJsonDecodingSpec TestHasField where
 {- ========================================================================== -}
 
 
+{- Empty object test. -}
+{- ========================================================================== -}
+
+data EmptyObj = EmptyObj
+  deriving stock (Show, Eq)
+  deriving (ToJSON, FromJSON) via (SpecJSON EmptyObj)
+instance HasJsonEncodingSpec EmptyObj where
+  type EncodingSpec EmptyObj = JsonObject '[]
+  toJSONStructure EmptyObj = Nil
+instance HasJsonDecodingSpec EmptyObj where
+  type DecodingSpec EmptyObj = EncodingSpec EmptyObj
+  fromJSONStructure Nil = pure EmptyObj
+
+
+{- Optional JsonSpecOf test. -}
+{- ========================================================================== -}
+
+newtype OptionalRef = OptionalRef
+  { vertex :: Maybe Vertex }
+  deriving stock (Show, Eq)
+  deriving (ToJSON, FromJSON) via (SpecJSON OptionalRef)
+instance HasJsonEncodingSpec OptionalRef where
+  type EncodingSpec OptionalRef =
+    JsonObject '[ "vertex" ::? JsonSpecOf Vertex ]
+  toJSONStructure OptionalRef { vertex } =
+    Field @"vertex" (fmap Ref vertex) :* Nil
+instance HasJsonDecodingSpec OptionalRef where
+  type DecodingSpec OptionalRef = EncodingSpec OptionalRef
+  fromJSONStructure (Field @"vertex" v :* Nil) =
+    pure OptionalRef { vertex = fmap unRef v }
+
+
 {- Annotated test. -}
 {- ========================================================================== -}
 
@@ -962,11 +1049,8 @@ instance HasJsonDecodingSpec AnnotatedVertex where
 
 
 -- NOTE: Annotations cannot be trivially and globally modified for
--- 'JsonSpecOf' structures — a known trade-off of the current design.
-
--- NOTE: field/refield allows remapping Haskell record field names to
--- JSON keys. The @sym type applications here serve as documentation
--- and guard against accidental test drift.
+-- 'JsonSpecOf' structures. This is a trade-off but has some advantages
+-- for local reasoning.
 data AnnotatedTriangle = AnnotatedTriangle
   { atVertex1 :: AnnotatedVertex
   , atVertex2 :: AnnotatedVertex
