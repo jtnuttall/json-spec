@@ -49,15 +49,15 @@ instance HasJsonEncodingSpec User where
       Required "last-login" JsonDateTime
     ]
   toJSONStructure user =
-    (Field @"name" (name user),
-    (Field @"last-login" (lastLogin user),
-    ()))
+    Field @"name" (name user)
+    :* Field @"last-login" (lastLogin user)
+    :* Nil
 instance HasJsonDecodingSpec User where
   type DecodingSpec User = EncodingSpec User
   fromJSONStructure
-      (Field @"name" name,
-      (Field @"last-login" lastLogin,
-      ()))
+      (Field @"name" name
+      :* Field @"last-login" lastLogin
+      :* Nil)
     =
       pure User { name , lastLogin }
 ```
