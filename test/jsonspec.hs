@@ -177,6 +177,22 @@ main =
           in
             actual `shouldBe` expected
 
+        it "optional nullable round-trip: absent fields re-encode as null" $
+          let
+            -- Decode with all optional fields absent
+            decoded :: Either String TestOptionality
+            decoded = A.eitherDecode "{\"bar\":null,\"qux\":1}"
+
+            -- Re-encode: absent 'baz' reappears as explicit null because
+            -- toJSONStructure wraps in Just, and join collapses the distinction.
+            reencoded :: ByteString
+            reencoded = case decoded of
+              Right v -> A.encode v
+              Left _ -> ""
+          in do
+            decoded `shouldBe` Right obj
+            reencoded `shouldBe` "{\"bar\":null,\"baz\":null,\"qux\":1}"
+
       describe "JsonSpecOf" $ do
         it "decodes nested ref" $
           let
@@ -290,6 +306,23 @@ main =
                 "{\"bar\":1,\"baz\":{\"bar\":0,\"foo\":\"foo2\"},\"foo\":\"foo\",\"qux\":null,\"qoo\":false}"
             expected :: Either String TestObj
             expected = Right sampleTestObjectWithNull
+          in
+            actual `shouldBe` expected
+
+        it "explicit null on Optional (non-nullable) field decodes as Nothing" $
+          let
+            actual :: Either String TestObj
+            actual =
+              A.eitherDecode
+                "{\"foo\":\"foo\",\"bar\":null,\"baz\":{\"foo\":\"foo2\",\"bar\":0},\"qux\":100,\"qoo\":true}"
+            expected :: Either String TestObj
+            expected = Right TestObj
+              { foo = "foo"
+              , bar = Nothing
+              , baz = TestSubObj { foo2 = "foo2", bar2 = 0 }
+              , qux = Just 100
+              , qoo = True
+              }
           in
             actual `shouldBe` expected
 

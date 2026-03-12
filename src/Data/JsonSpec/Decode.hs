@@ -42,6 +42,7 @@ import Prelude
   )
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Vector as Vector
+import Control.Applicative ((<|>))
 
 
 {- |
@@ -151,7 +152,12 @@ instance (KnownSymbol key, KnownOptionality req, StructureFromJSON (JStruct spec
         SOptional -> pure $ Field Nothing
       Just raw -> case optionalitySing @req of
         SRequired -> Field <$> (reprParseJSON raw <?> Key (sym @key))
-        SOptional -> Field . Just <$> (reprParseJSON raw <?> Key (sym @key))
+        SOptional ->
+          {- Symmetry with Encode requires that optional null round-trips -}
+          let parse = Field . Just <$> (reprParseJSON raw <?> Key (sym @key))
+           in case raw of
+                Null -> parse <|> pure (Field Nothing)
+                _ -> parse
 
 class AltFromJSON (spec :: Specification) where
   parseAlt :: Value -> Parser (JStructVal spec)
